@@ -76,49 +76,79 @@ def get_badges(df, user):
 def get_journey_plan():
     """Fetches the 90 Days Journey plan."""
     try:
-        # Expected Columns: Day, Phase 1 (The Gym), Phase 2 (The Lab), Phase 3 (The Show)
         df = get_db().read(worksheet="90 Days Journey", ttl=600) 
         return df.dropna(how="all")
     except:
         return pd.DataFrame()
-
-def get_active_journey_tasks(user, history_df, journey_df):
-    """
-    Determines which Day the user is on.
-    Logic: Check Day 1 tasks. If all done in history, check Day 2.
-    Returns: current_day_number, list_of_pending_tasks_for_that_day
-    """
-    if journey_df.empty: return 0, []
     
-    # Get all tasks the user has EVER completed
-    if history_df.empty:
-        completed_tasks = set()
-    else:
-        user_history = history_df[history_df['username'] == user]
-        completed_tasks = set(user_history['habit_name'].tolist())
 
-    # Iterate through the journey plan day by day
-    # Assuming columns are: Day, Phase 1, Phase 2, Phase 3
-    # We rename columns to be safe or access by index if needed, but let's assume standard headers
-    
-    for index, row in journey_df.iterrows():
-        day_num = row.iloc[0] # Column 0 is Day
-        tasks = [row.iloc[1], row.iloc[2], row.iloc[3]] # The 3 tasks
+def get_journey_history():
+    """Fetches the COMPLETED journey tasks safely."""
+    expected_cols = ["username", "Day", "Phase 1 (The Gym)", "Phase 2 (The Lab)", "Phase 3 (The Show)"]
+    try:
+        df = get_db().read(worksheet="90 Days Journey Completed", ttl=0)
         
-        # Identify which of these 3 are NOT done
-        pending = [t for t in tasks if t not in completed_tasks and pd.notna(t) and t != ""]
+        # CRITICAL FIX: If sheet is empty or headers are wrong, return clean empty DF with columns
+        if df.empty or "Day" not in df.columns:
+            return pd.DataFrame(columns=expected_cols)
+
+        # Ensure 'Day' is integer
+        df['Day'] = pd.to_numeric(df['Day'], errors='coerce').fillna(0).astype(int)
+        return df
+    except Exception:
+        return pd.DataFrame(columns=expected_cols)  
+    
+
+def get_active_journey_tasks(user, journey_history_df, journey_plan_df):
+    """
+    Determines current Day based on Wide Structure.
+    """
+    if journey_plan_df.empty: return 0, []
+    
+    # CRITICAL FIX: Ensure user_history has columns even if input is empty
+    if journey_history_df.empty:
+        user_history = pd.DataFrame(columns=["username", "Day", "Phase 1 (The Gym)", "Phase 2 (The Lab)", "Phase 3 (The Show)"])
+    else:
+        user_history = journey_history_df[journey_history_df['username'] == user]
+
+    # Iterate through plan
+    for index, row in journey_plan_df.iterrows():
+        # Ensure Day is an integer
+        try:
+            day_num = int(row.iloc[0])
+        except:
+            continue # Skip bad rows in plan
+        
+        # Get tasks from plan
+        t1, t2, t3 = row.iloc[1], row.iloc[2], row.iloc[3]
+        tasks_map = {t1: "Phase 1 (The Gym)", t2: "Phase 2 (The Lab)", t3: "Phase 3 (The Show)"}
+        
+        # Check if this day exists in history
+        # Now this is safe because user_history definitely has a 'Day' column
+        day_record = user_history[user_history['Day'] == day_num]
+        
+        pending = []
+        
+        if day_record.empty:
+            # No record for this day? Then everything is pending.
+            pending = [t for t in [t1, t2, t3] if pd.notna(t) and t != ""]
+        else:
+            # Check which columns are empty in the record
+            record = day_record.iloc[0]
+            for task, col_name in tasks_map.items():
+                if pd.notna(task) and task != "":
+                    # If column is empty or NaN, task is pending
+                    val = record.get(col_name)
+                    if pd.isna(val) or val == "" or val is None:
+                        pending.append(task)
         
         if pending:
-            # If there are pending tasks, THIS is the current level.
-            # Return the day number and the specific tasks left to do.
             return day_num, pending
-    
-    return 91, [] # Completed the whole journey!
-
+            
+    return 91, []
 # --- 3. VISUALIZATION ENGINE ---
 
 def plot_github_grid(df, user, year):
-    """Replicates GitHub Contribution Graph."""
     user_data = df[df['username'] == user].copy()
     user_data['date'] = pd.to_datetime(user_data['date'])
     user_data = user_data[user_data['date'].dt.year == year]
@@ -169,7 +199,6 @@ def plot_github_grid(df, user, year):
     return fig
 
 def plot_habit_breakdown_bars(df, user, year, month=None):
-    """Bar chart with distinct colors for each habit."""
     user_df = df[df['username'] == user].copy()
     user_df['date'] = pd.to_datetime(user_df['date'])
     user_df = user_df[user_df['date'].dt.year == year]
@@ -185,61 +214,11 @@ def plot_habit_breakdown_bars(df, user, year, month=None):
     habit_counts = user_df['habit_name'].value_counts().reset_index()
     habit_counts.columns = ['Habit', 'Commits']
     
-    # color='Habit' ensures each habit gets a different color
     fig = px.bar(
         habit_counts, x='Habit', y='Commits',
-        title=title, text_auto=True,
-        color='Habit' 
+        title=title, text_auto=True, color='Habit' 
     )
     fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
-    return fig
-
-def plot_journey_analytics(journey_df, history_df, user):
-    """Visualizes progress specifically for the 90 Days Journey."""
-    if journey_df.empty: return None
-    
-    # 1. Calculate Progress per Phase
-    # Journey columns usually: Day, Phase 1, Phase 2, Phase 3
-    # We ignore 'Day' (col 0)
-    phases = journey_df.columns[1:] 
-    
-    # Get user history
-    if history_df.empty:
-        completed_set = set()
-    else:
-        completed_set = set(history_df[history_df['username'] == user]['habit_name'].unique())
-    
-    stats = []
-    
-    for phase in phases:
-        # Get all tasks in this phase column
-        tasks = journey_df[phase].dropna().tolist()
-        total = len(tasks)
-        # Count how many are in completed_set
-        done = sum(1 for t in tasks if t in completed_set)
-        
-        # Clean phase name for display (e.g., "Phase 1: The Gym..." -> "The Gym")
-        short_name = phase.split(":")[0] + " (" + phase.split("(")[-1].replace(")", "")
-        
-        stats.append({"Phase": short_name, "Type": "Completed", "Count": done})
-        stats.append({"Phase": short_name, "Type": "Remaining", "Count": total - done})
-
-    df_stats = pd.DataFrame(stats)
-    
-    # 2. Create Stacked Bar Chart
-    fig = px.bar(
-        df_stats, x="Count", y="Phase", color="Type", orientation='h',
-        title="🛡️ Quest Completion by Phase",
-        text_auto=True,
-        color_discrete_map={"Completed": "#39d353", "Remaining": "#161b22"}
-    )
-    
-    fig.update_layout(
-        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-        xaxis=dict(showgrid=False), yaxis=dict(showgrid=False),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-    )
-    
     return fig
 
 def plot_correlation_matrix(df, user):
@@ -249,6 +228,54 @@ def plot_correlation_matrix(df, user):
     if len(pivot.columns) < 2: return None
     corr = pivot.corr()
     fig = px.imshow(corr, text_auto=True, aspect="auto", color_continuous_scale="RdBu_r", title="🔮 Habit Correlation Matrix")
+    return fig
+
+def plot_journey_analytics(journey_plan_df, journey_history_df, user):
+    """Visualizes progress based on Wide Table."""
+    if journey_plan_df.empty: return None
+    
+    # Map friendly names to sheet columns
+    col_map = {
+        "Phase 1 (The Gym)": journey_plan_df.columns[1],
+        "Phase 2 (The Lab)": journey_plan_df.columns[2],
+        "Phase 3 (The Show)": journey_plan_df.columns[3]
+    }
+    
+    user_history = pd.DataFrame()
+    if not journey_history_df.empty:
+        user_history = journey_history_df[journey_history_df['username'] == user]
+    
+    stats = []
+    
+    for phase_name, plan_col in col_map.items():
+        # Total tasks in plan (count non-empty rows in that column)
+        total = journey_plan_df[plan_col].count()
+        
+        # Completed tasks (count non-empty rows in history column)
+        # We need to map the hardcoded column name from the history sheet
+        # The history sheet headers are: Phase 1 (The Gym), Phase 2 (The Lab), Phase 3 (The Show)
+        done = 0
+        if not user_history.empty and phase_name in user_history.columns:
+            done = user_history[phase_name].count()
+            
+        short_name = phase_name.split(":")[0] + " (" + phase_name.split("(")[-1].replace(")", "")
+        
+        stats.append({"Phase": short_name, "Type": "Completed", "Count": done})
+        stats.append({"Phase": short_name, "Type": "Remaining", "Count": max(0, total - done)})
+
+    df_stats = pd.DataFrame(stats)
+    
+    fig = px.bar(
+        df_stats, x="Count", y="Phase", color="Type", orientation='h',
+        title="🛡️ Quest Completion by Phase",
+        text_auto=True,
+        color_discrete_map={"Completed": "#39d353", "Remaining": "#161b22"}
+    )
+    fig.update_layout(
+        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+        xaxis=dict(showgrid=False), yaxis=dict(showgrid=False),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+    )
     return fig
 
 # --- DATABASE & AUTH ---
@@ -303,6 +330,54 @@ def log_progress(user, challenges_to_log):
         return True
     return False
 
+def log_journey_progress(user, day_num, tasks_dict, journey_plan_df):
+    """
+    Logs to '90 Days Journey Completed' using WIDE schema.
+    tasks_dict: { 'Task Name': True/False }
+    """
+    df = get_journey_history()
+    
+    # 1. Map tasks to columns
+    # We find which column each completed task belongs to by looking at the plan
+    # Filter plan for this day
+    day_plan = journey_plan_df[journey_plan_df.iloc[:, 0] == day_num]
+    if day_plan.empty: return False
+    
+    t1 = day_plan.iloc[0, 1]
+    t2 = day_plan.iloc[0, 2]
+    t3 = day_plan.iloc[0, 3]
+    
+    # Columns in Completed Sheet
+    col_gym = "Phase 1 (The Gym)"
+    col_lab = "Phase 2 (The Lab)"
+    col_show = "Phase 3 (The Show)"
+    
+    # 2. Check if row exists
+    # We look for username + Day
+    mask = (df['username'] == user) & (df['Day'] == day_num)
+    
+    new_data = {}
+    
+    # Assign task name to correct column if completed
+    if t1 in tasks_dict: new_data[col_gym] = t1
+    if t2 in tasks_dict: new_data[col_lab] = t2
+    if t3 in tasks_dict: new_data[col_show] = t3
+    
+    if df[mask].empty:
+        # Create new row
+        new_row = {"username": user, "Day": day_num}
+        new_row.update(new_data)
+        updated_df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+    else:
+        # Update existing row
+        idx = df[mask].index[0]
+        for col, val in new_data.items():
+            df.at[idx, col] = val
+        updated_df = df
+        
+    update_data("90 Days Journey Completed", updated_df)
+    return True
+
 # --- UI: MAIN APP ---
 def main_dashboard():
     user = st.session_state['user']
@@ -327,18 +402,17 @@ def main_dashboard():
         st.header(f"📝 Commit Log: {date.today()}")
         st.caption("Consistency is the key to evolving.")
         
-# --- 90 DAYS JOURNEY LOGIC (Only for Sachin) ---
+        # --- 90 DAYS JOURNEY LOGIC ---
         if user == "sachin":
-            journey_df = get_journey_plan()
-            if not journey_df.empty:
-                current_day, pending_tasks = get_active_journey_tasks(user, history_df, journey_df)
+            journey_plan_df = get_journey_plan()
+            journey_hist_df = get_journey_history() 
+            
+            if not journey_plan_df.empty:
+                current_day, pending_tasks = get_active_journey_tasks(user, journey_hist_df, journey_plan_df)
                 
-                # --- NEW: JOURNEY VISUALIZATION ---
                 with st.expander("🗺️ Journey Map & Stats", expanded=False):
                     col_map, col_stats = st.columns([1, 2])
                     with col_map:
-                        # Simple Gauge for "Days Complete"
-                        percent_done = ((current_day - 1) / 90) * 100
                         fig_gauge = go.Figure(go.Indicator(
                             mode = "gauge+number",
                             value = current_day - 1,
@@ -349,8 +423,7 @@ def main_dashboard():
                         st.plotly_chart(fig_gauge, use_container_width=True)
                         
                     with col_stats:
-                        # Phase Breakdown Chart
-                        fig_phase = plot_journey_analytics(journey_df, history_df, user)
+                        fig_phase = plot_journey_analytics(journey_plan_df, journey_hist_df, user)
                         if fig_phase: st.plotly_chart(fig_phase, use_container_width=True)
 
                 if current_day <= 90:
@@ -358,13 +431,14 @@ def main_dashboard():
                     with st.form("journey_form"):
                         st.write("Complete these to unlock the next level:")
                         j_status = {}
-                        cols = st.columns(3) # Nice column layout for 3 phases
+                        cols = st.columns(3)
                         for i, t in enumerate(pending_tasks):
                             j_status[t] = cols[i].checkbox(f"{t}")
                         
                         if st.form_submit_button("Push Journey Update 🚀", use_container_width=True):
-                            to_log = [k for k,v in j_status.items() if v]
-                            if to_log and log_progress(user, to_log):
+                            to_log = {k: v for k,v in j_status.items() if v}
+                            # Call NEW Log function with extra params
+                            if to_log and log_journey_progress(user, current_day, to_log, journey_plan_df):
                                 st.balloons()
                                 st.success("Journey Updated! Check back to see if you leveled up.")
                                 time.sleep(1)
@@ -374,7 +448,6 @@ def main_dashboard():
                     st.success("🎉 YOU HAVE COMPLETED THE 90 DAY JOURNEY! LEGEND STATUS UNLOCKED.")
                     st.divider()
 
-
         # --- STANDARD HABITS LOGIC ---
         all_challenges = get_user_challenges(user)
         today_iso = date.today().isoformat()
@@ -382,19 +455,11 @@ def main_dashboard():
         if not history_df.empty:
             done_today = history_df[(history_df['username'] == user) & (history_df['date'] == today_iso)]['habit_name'].tolist()
         
-        # Filter pending habits (Standard)
         pending = [c for c in all_challenges if c not in done_today]
-        
-        # We also need to hide pending Journey tasks if they were checked today in the standard list logic
-        # But for now, we treat them separate visually, but they save to same DB.
         
         if not all_challenges and user != "sachin":
              st.warning("No challenges active! Go to Config to add some.")
         elif not pending:
-            # If user is sachin, check if journey is also done
-            if user == "sachin":
-                 # Simple check: if pending (standard) is empty, we just show success for habits
-                 pass
             st.success("✅ Daily Habits Completed!")
             with st.expander("View Completed Today"):
                 for t in done_today: st.write(f"✅ {t}")
