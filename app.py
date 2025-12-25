@@ -278,12 +278,26 @@ def plot_journey_analytics(journey_plan_df, journey_history_df, user):
     )
     return fig
 
+
+
 # --- DATABASE & AUTH ---
 def get_db(): return st.connection("gsheets", type=GSheetsConnection)
+
+# 1. ADD CACHING HERE (ttl=5 means "remember for 5 seconds")
+# This prevents calling Google 100 times in 1 minute.
+@st.cache_data(ttl=5)
 def get_data(worksheet):
-    try: return get_db().read(worksheet=worksheet, ttl=0).dropna(how="all")
-    except: return pd.DataFrame()
-def update_data(worksheet, df): get_db().update(worksheet=worksheet, data=df)
+    try:
+        # We use a slightly higher internal TTL for the connection itself
+        return get_db().read(worksheet=worksheet, ttl=5).dropna(how="all")
+    except:
+        return pd.DataFrame()
+
+# 2. CLEAR CACHE ON UPDATE
+# When we write new data, we must clear the cache so the user sees the update immediately.
+def update_data(worksheet, df):
+    get_db().update(worksheet=worksheet, data=df)
+    get_data.clear() # Clear the cache to force a reload next time
 
 def verify_login(username, password):
     users = get_data("Users")
@@ -448,25 +462,45 @@ def main_dashboard():
                     st.success("🎉 YOU HAVE COMPLETED THE 90 DAY JOURNEY! LEGEND STATUS UNLOCKED.")
                     st.divider()
 
-        # --- STANDARD HABITS LOGIC ---
+
+# --- STANDARD HABITS LOGIC ---
         all_challenges = get_user_challenges(user)
         today_iso = date.today().isoformat()
-        done_today = []
-        if not history_df.empty:
-            done_today = history_df[(history_df['username'] == user) & (history_df['date'] == today_iso)]['habit_name'].tolist()
         
-        pending = [c for c in all_challenges if c not in done_today]
+        # 1. Get EVERYTHING you did today (Active + Archived)
+        raw_done_today = []
+        if not history_df.empty:
+            raw_done_today = history_df[(history_df['username'] == user) & (history_df['date'] == today_iso)]['habit_name'].tolist()
+        
+        # 2. CRITICAL FIX: Filter to count ONLY habits that are currently Active
+        # This ensures the progress bar matches your current goals exactly.
+        valid_done_today = [h for h in raw_done_today if h in all_challenges]
+        
+        # 3. Calculate Pending (Active tasks minus what you did)
+        pending = [c for c in all_challenges if c not in raw_done_today]
         
         if not all_challenges and user != "sachin":
              st.warning("No challenges active! Go to Config to add some.")
         elif not pending:
             st.success("✅ Daily Habits Completed!")
             with st.expander("View Completed Today"):
-                for t in done_today: st.write(f"✅ {t}")
+                for t in valid_done_today: st.write(f"✅ {t}")
         else:
             st.subheader("Your Routine")
-            progress_val = len(done_today) / max(len(all_challenges), 1)
-            st.progress(progress_val, text=f"{len(done_today)}/{len(all_challenges)} Done")
+            
+            # 4. Progress Math (Now safe because numerator is a subset of denominator)
+            # We use valid_done_today count vs all_challenges count
+            total_active = len(all_challenges)
+            completed_active = len(valid_done_today)
+            
+            # Avoid division by zero
+            progress_val = completed_active / max(total_active, 1)
+            
+            # Final safety clamp just in case
+            progress_val = min(progress_val, 1.0)
+            
+            st.progress(progress_val, text=f"{completed_active}/{total_active} Done")
+            
             with st.form("log"):
                 status = {}
                 cols = st.columns(2)
@@ -478,6 +512,8 @@ def main_dashboard():
                         st.success(f"Updates pushed! +{len(to_log)*10} XP")
                         time.sleep(1)
                         st.rerun()
+
+
 
     elif nav == "📊 My Profile & Analytics":
         st.header("🧠 My Growth Dashboard")
