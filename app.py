@@ -11,7 +11,7 @@ import calendar
 # --- CONFIGURATION ---
 st.set_page_config(page_title="AI Growth Engine", page_icon="⚡", layout="wide")
 
-# --- 1. GAMIFICATION ENGINE (ANIMAL EVOLUTION) ---
+# --- 1. GAMIFICATION ENGINE ---
 LEVELS = {
     1: "Hatchling 🐣", 5: "Busy Beaver 🦫", 10: "Swift Gazelle 🦌",
     20: "Loyal Wolf 🐺", 40: "Roaring Lion 🦁", 60: "Wise Owl 🦉",
@@ -57,50 +57,83 @@ def get_badges(df, user):
     user_df['date'] = pd.to_datetime(user_df['date'])
     total_logs = len(user_df)
     habit_counts = user_df['habit_name'].value_counts()
+    
     if total_logs >= 1: badges.append("🌱 First Step")
-    if total_logs >= 10: badges.append("🚀 Liftoff")
     if total_logs >= 50: badges.append("🔨 Builder")
     if total_logs >= 100: badges.append("🛡️ Centurion")
-    if total_logs >= 500: badges.append("⚔️ Warlord")
-    if total_logs >= 1000: badges.append("👑 Legend")
+    
     streak = calculate_streaks(df, user)
-    if streak >= 3: badges.append("🎩 Hat Trick")
     if streak >= 7: badges.append("🔥 Week Wielder")
-    if streak >= 14: badges.append("🏰 Fortnight Fighter")
     if streak >= 30: badges.append("🌕 Monthly Master")
-    if streak >= 60: badges.append("⚡ Supercharged")
-    if streak >= 100: badges.append("💎 Unbreakable")
-    if streak >= 365: badges.append("🌞 Solar Deity")
-    user_df['weekday'] = user_df['date'].dt.weekday
-    if len(user_df[user_df['weekday'] >= 5]) >= 5: badges.append("📅 Weekend Warrior")
-    if len(user_df[user_df['weekday'] == 0]) >= 5: badges.append("👊 Monday Monster")
+    
     all_habit_names = " ".join(user_df['habit_name'].unique()).lower()
-    if "code" in all_habit_names or "python" in all_habit_names or "leetcode" in all_habit_names: badges.append("💻 Hacker")
-    if "read" in all_habit_names or "book" in all_habit_names: badges.append("📚 Scholar")
-    if "workout" in all_habit_names or "gym" in all_habit_names or "run" in all_habit_names: badges.append("🏋️ Athlete")
-    if "medit" in all_habit_names or "yoga" in all_habit_names: badges.append("🧘 Zen Master")
-    if "water" in all_habit_names: badges.append("💧 Hydro Homie")
-    if len(habit_counts) >= 5: badges.append("🃏 Jack of All Trades")
-    if any(habit_counts >= 50): badges.append("🎯 Specialist")
-    daily_volume = user_df.groupby('date').size()
-    if len(daily_volume[daily_volume >= 2]) >= 5: badges.append("🔱 Triple Threat")
+    if "code" in all_habit_names or "python" in all_habit_names: badges.append("💻 Hacker")
+    if "git" in all_habit_names: badges.append("🐙 Git Master")
+    
     return badges
 
-# --- 2. VISUALIZATION ENGINE ---
+# --- 2. JOURNEY LOGIC (THE 90 DAY QUEST) ---
+def get_journey_plan():
+    """Fetches the 90 Days Journey plan."""
+    try:
+        # Expected Columns: Day, Phase 1 (The Gym), Phase 2 (The Lab), Phase 3 (The Show)
+        df = get_db().read(worksheet="90 Days Journey", ttl=600) 
+        return df.dropna(how="all")
+    except:
+        return pd.DataFrame()
+
+def get_active_journey_tasks(user, history_df, journey_df):
+    """
+    Determines which Day the user is on.
+    Logic: Check Day 1 tasks. If all done in history, check Day 2.
+    Returns: current_day_number, list_of_pending_tasks_for_that_day
+    """
+    if journey_df.empty: return 0, []
+    
+    # Get all tasks the user has EVER completed
+    if history_df.empty:
+        completed_tasks = set()
+    else:
+        user_history = history_df[history_df['username'] == user]
+        completed_tasks = set(user_history['habit_name'].tolist())
+
+    # Iterate through the journey plan day by day
+    # Assuming columns are: Day, Phase 1, Phase 2, Phase 3
+    # We rename columns to be safe or access by index if needed, but let's assume standard headers
+    
+    for index, row in journey_df.iterrows():
+        day_num = row.iloc[0] # Column 0 is Day
+        tasks = [row.iloc[1], row.iloc[2], row.iloc[3]] # The 3 tasks
+        
+        # Identify which of these 3 are NOT done
+        pending = [t for t in tasks if t not in completed_tasks and pd.notna(t) and t != ""]
+        
+        if pending:
+            # If there are pending tasks, THIS is the current level.
+            # Return the day number and the specific tasks left to do.
+            return day_num, pending
+    
+    return 91, [] # Completed the whole journey!
+
+# --- 3. VISUALIZATION ENGINE ---
 
 def plot_github_grid(df, user, year):
+    """Replicates GitHub Contribution Graph."""
     user_data = df[df['username'] == user].copy()
     user_data['date'] = pd.to_datetime(user_data['date'])
     user_data = user_data[user_data['date'].dt.year == year]
     daily_counts = user_data.groupby('date').size()
+    
     start_date = date(year, 1, 1)
     end_date = date(year, 12, 31)
+    
     def get_week_day(d):
         days_from_start = (d - start_date).days
         first_day_weekday = start_date.weekday()
         week = (days_from_start + first_day_weekday) // 7
         weekday = d.weekday()
         return week, weekday
+
     z_data = [[0]*54 for _ in range(7)]
     hover_text = [["" for _ in range(54)] for _ in range(7)]
     current = start_date
@@ -112,8 +145,10 @@ def plot_github_grid(df, user, year):
             date_str = current.strftime("%b %d, %Y")
             hover_text[dy][wk] = f"{count} contributions on {date_str}"
         current += timedelta(days=1)
+        
     max_val = max(daily_counts.max(), 1) if not daily_counts.empty else 1
     colors = [[0.0, "#161b22"], [0.0001, "#0e4429"], [0.25, "#006d32"], [0.50, "#26a641"], [0.75, "#39d353"], [1.0, "#39d353"]]
+    
     month_labels = []
     month_ticks = []
     for m in range(1, 13):
@@ -121,6 +156,7 @@ def plot_github_grid(df, user, year):
         wk, _ = get_week_day(d)
         month_labels.append(d.strftime("%b"))
         month_ticks.append(wk)
+
     fig = go.Figure(data=go.Heatmap(
         z=z_data, x=[i for i in range(54)], y=["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
         text=hover_text, hoverinfo="text", colorscale=colors, showscale=False, xgap=2, ygap=2, zmin=0, zmax=max_val
@@ -132,55 +168,78 @@ def plot_github_grid(df, user, year):
     )
     return fig
 
-def plot_completion_pies(df, user, total_active_challenges):
-    user_df = df[df['username'] == user].copy()
-    user_df['date'] = pd.to_datetime(user_df['date'])
-    today = datetime.today()
-    today_records = user_df[user_df['date'].dt.date == today.date()]
-    daily_val = (len(today_records) / max(total_active_challenges, 1)) * 100
-    this_month = user_df[user_df['date'].dt.month == today.month]
-    monthly_total = total_active_challenges * today.day
-    monthly_val = (len(this_month) / max(monthly_total, 1)) * 100
-    this_year = user_df[user_df['date'].dt.year == today.year]
-    yearly_total = total_active_challenges * today.timetuple().tm_yday
-    yearly_val = (len(this_year) / max(yearly_total, 1)) * 100
-    fig = go.Figure()
-    def create_donut(val, label, domain_x):
-        display_val = min(val, 100)
-        return go.Pie(values=[display_val, 100-display_val], labels=["Done", "Left"], domain={'x': domain_x}, hole=0.7,
-                      marker=dict(colors=['#39d353', '#161b22']), textinfo='none', hoverinfo='label+percent', name=label)
-    fig.add_trace(create_donut(daily_val, "Daily", [0, 0.30]))
-    fig.add_trace(create_donut(monthly_val, "Monthly", [0.35, 0.65]))
-    fig.add_trace(create_donut(yearly_val, "Yearly", [0.70, 1.0]))
-    fig.update_layout(
-        annotations=[dict(text=f"{int(daily_val)}%", x=0.15, y=0.5, font_size=20, showarrow=False),
-                     dict(text=f"{int(monthly_val)}%", x=0.50, y=0.5, font_size=20, showarrow=False),
-                     dict(text=f"{int(yearly_val)}%", x=0.85, y=0.5, font_size=20, showarrow=False),
-                     dict(text="Daily", x=0.15, y=0.2, showarrow=False),
-                     dict(text="Monthly", x=0.50, y=0.2, showarrow=False),
-                     dict(text="Yearly", x=0.85, y=0.2, showarrow=False)],
-        showlegend=False, height=250, margin=dict(l=10, r=10, t=10, b=10), paper_bgcolor="rgba(0,0,0,0)"
-    )
-    return fig
-
 def plot_habit_breakdown_bars(df, user, year, month=None):
+    """Bar chart with distinct colors for each habit."""
     user_df = df[df['username'] == user].copy()
     user_df['date'] = pd.to_datetime(user_df['date'])
     user_df = user_df[user_df['date'].dt.year == year]
-    title = f"📅 Yearly Habit Breakdown ({year})"
+    
+    title = f"📅 Yearly Breakdown ({year})"
     if month:
         user_df = user_df[user_df['date'].dt.month == month]
         month_name = calendar.month_name[month]
-        title = f"📅 Monthly Habit Breakdown ({month_name} {year})"
+        title = f"📅 Monthly Breakdown ({month_name} {year})"
+    
     if user_df.empty: return None
+    
     habit_counts = user_df['habit_name'].value_counts().reset_index()
     habit_counts.columns = ['Habit', 'Commits']
+    
+    # color='Habit' ensures each habit gets a different color
     fig = px.bar(
         habit_counts, x='Habit', y='Commits',
         title=title, text_auto=True,
-        color='Habit', color_continuous_scale="Greens"
+        color='Habit' 
     )
     fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+    return fig
+
+def plot_journey_analytics(journey_df, history_df, user):
+    """Visualizes progress specifically for the 90 Days Journey."""
+    if journey_df.empty: return None
+    
+    # 1. Calculate Progress per Phase
+    # Journey columns usually: Day, Phase 1, Phase 2, Phase 3
+    # We ignore 'Day' (col 0)
+    phases = journey_df.columns[1:] 
+    
+    # Get user history
+    if history_df.empty:
+        completed_set = set()
+    else:
+        completed_set = set(history_df[history_df['username'] == user]['habit_name'].unique())
+    
+    stats = []
+    
+    for phase in phases:
+        # Get all tasks in this phase column
+        tasks = journey_df[phase].dropna().tolist()
+        total = len(tasks)
+        # Count how many are in completed_set
+        done = sum(1 for t in tasks if t in completed_set)
+        
+        # Clean phase name for display (e.g., "Phase 1: The Gym..." -> "The Gym")
+        short_name = phase.split(":")[0] + " (" + phase.split("(")[-1].replace(")", "")
+        
+        stats.append({"Phase": short_name, "Type": "Completed", "Count": done})
+        stats.append({"Phase": short_name, "Type": "Remaining", "Count": total - done})
+
+    df_stats = pd.DataFrame(stats)
+    
+    # 2. Create Stacked Bar Chart
+    fig = px.bar(
+        df_stats, x="Count", y="Phase", color="Type", orientation='h',
+        title="🛡️ Quest Completion by Phase",
+        text_auto=True,
+        color_discrete_map={"Completed": "#39d353", "Remaining": "#161b22"}
+    )
+    
+    fig.update_layout(
+        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+        xaxis=dict(showgrid=False), yaxis=dict(showgrid=False),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+    )
+    
     return fig
 
 def plot_correlation_matrix(df, user):
@@ -198,6 +257,7 @@ def get_data(worksheet):
     try: return get_db().read(worksheet=worksheet, ttl=0).dropna(how="all")
     except: return pd.DataFrame()
 def update_data(worksheet, df): get_db().update(worksheet=worksheet, data=df)
+
 def verify_login(username, password):
     users = get_data("Users")
     if users.empty: return False
@@ -205,16 +265,19 @@ def verify_login(username, password):
     if not user_row.empty:
         return bcrypt.checkpw(password.encode('utf-8'), user_row.iloc[0]['password'].encode('utf-8'))
     return False
+
 def register_user(username, password):
     users = get_data("Users")
     if not users.empty and username in users['username'].values: return False
     hashed = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
     update_data("Users", pd.concat([users, pd.DataFrame([{"username": username, "password": hashed}])], ignore_index=True))
     return True
+
 def get_user_challenges(username):
     df = get_data("User_Habits")
     if df.empty: return []
     return df[(df['username'] == username) & (df['active'] == 1)]['habit_name'].tolist()
+
 def toggle_challenge(username, challenge_name, action="add"):
     df = get_data("User_Habits")
     if action == "add":
@@ -228,6 +291,7 @@ def toggle_challenge(username, challenge_name, action="add"):
             mask = (df['username'] == username) & (df['habit_name'] == challenge_name)
             df.loc[mask, 'active'] = 0
     update_data("User_Habits", df)
+
 def log_progress(user, challenges_to_log):
     df = get_data("Habits")
     today = date.today().isoformat()
@@ -243,6 +307,7 @@ def log_progress(user, challenges_to_log):
 def main_dashboard():
     user = st.session_state['user']
     history_df = get_data("Habits")
+    
     with st.sidebar:
         level, title, progress, total_xp = calculate_gamification(history_df, user)
         badges = get_badges(history_df, user)
@@ -250,10 +315,8 @@ def main_dashboard():
         st.write(f"**{title}** (Lvl {level})")
         st.progress(progress, text=f"XP: {total_xp}")
         with st.expander(f"🏆 Trophy Case ({len(badges)})", expanded=True):
-            if badges:
-                st.write("\n".join([f"- {b}" for b in badges]))
-            else:
-                st.caption("No badges yet. Start logging!")
+            if badges: st.write("\n".join([f"- {b}" for b in badges]))
+            else: st.caption("No badges yet.")
         st.divider()
         nav = st.radio("Navigation", ["🚀 Daily Commit", "📊 My Profile & Analytics", "⚙️ Config Challenges"])
         if st.button("Logout"):
@@ -263,29 +326,88 @@ def main_dashboard():
     if nav == "🚀 Daily Commit":
         st.header(f"📝 Commit Log: {date.today()}")
         st.caption("Consistency is the key to evolving.")
+        
+# --- 90 DAYS JOURNEY LOGIC (Only for Sachin) ---
+        if user == "sachin":
+            journey_df = get_journey_plan()
+            if not journey_df.empty:
+                current_day, pending_tasks = get_active_journey_tasks(user, history_df, journey_df)
+                
+                # --- NEW: JOURNEY VISUALIZATION ---
+                with st.expander("🗺️ Journey Map & Stats", expanded=False):
+                    col_map, col_stats = st.columns([1, 2])
+                    with col_map:
+                        # Simple Gauge for "Days Complete"
+                        percent_done = ((current_day - 1) / 90) * 100
+                        fig_gauge = go.Figure(go.Indicator(
+                            mode = "gauge+number",
+                            value = current_day - 1,
+                            title = {'text': "Days Conquered"},
+                            gauge = {'axis': {'range': [None, 90]}, 'bar': {'color': "#39d353"}}
+                        ))
+                        fig_gauge.update_layout(height=200, margin=dict(l=20, r=20, t=50, b=20), paper_bgcolor="rgba(0,0,0,0)")
+                        st.plotly_chart(fig_gauge, use_container_width=True)
+                        
+                    with col_stats:
+                        # Phase Breakdown Chart
+                        fig_phase = plot_journey_analytics(journey_df, history_df, user)
+                        if fig_phase: st.plotly_chart(fig_phase, use_container_width=True)
+
+                if current_day <= 90:
+                    st.info(f"📍 **Day {current_day} Objective**")
+                    with st.form("journey_form"):
+                        st.write("Complete these to unlock the next level:")
+                        j_status = {}
+                        cols = st.columns(3) # Nice column layout for 3 phases
+                        for i, t in enumerate(pending_tasks):
+                            j_status[t] = cols[i].checkbox(f"{t}")
+                        
+                        if st.form_submit_button("Push Journey Update 🚀", use_container_width=True):
+                            to_log = [k for k,v in j_status.items() if v]
+                            if to_log and log_progress(user, to_log):
+                                st.balloons()
+                                st.success("Journey Updated! Check back to see if you leveled up.")
+                                time.sleep(1)
+                                st.rerun()
+                    st.divider()
+                else:
+                    st.success("🎉 YOU HAVE COMPLETED THE 90 DAY JOURNEY! LEGEND STATUS UNLOCKED.")
+                    st.divider()
+
+
+        # --- STANDARD HABITS LOGIC ---
         all_challenges = get_user_challenges(user)
         today_iso = date.today().isoformat()
         done_today = []
         if not history_df.empty:
             done_today = history_df[(history_df['username'] == user) & (history_df['date'] == today_iso)]['habit_name'].tolist()
+        
+        # Filter pending habits (Standard)
         pending = [c for c in all_challenges if c not in done_today]
-        if not all_challenges:
-            st.warning("No challenges active! Go to Config to add some.")
+        
+        # We also need to hide pending Journey tasks if they were checked today in the standard list logic
+        # But for now, we treat them separate visually, but they save to same DB.
+        
+        if not all_challenges and user != "sachin":
+             st.warning("No challenges active! Go to Config to add some.")
         elif not pending:
-            st.balloons()
-            st.success("🎉 All daily commits pushed! +50 Bonus XP")
-            with st.expander("View Completed"):
+            # If user is sachin, check if journey is also done
+            if user == "sachin":
+                 # Simple check: if pending (standard) is empty, we just show success for habits
+                 pass
+            st.success("✅ Daily Habits Completed!")
+            with st.expander("View Completed Today"):
                 for t in done_today: st.write(f"✅ {t}")
         else:
-            progress_val = len(done_today) / len(all_challenges)
+            st.subheader("Your Routine")
+            progress_val = len(done_today) / max(len(all_challenges), 1)
             st.progress(progress_val, text=f"{len(done_today)}/{len(all_challenges)} Done")
             with st.form("log"):
-                st.write("**Pending Tasks:**")
                 status = {}
                 cols = st.columns(2)
                 for i, c in enumerate(pending):
                     status[c] = cols[i%2].checkbox(c)
-                if st.form_submit_button("Push Updates 🟢", use_container_width=True):
+                if st.form_submit_button("Push Habit Updates 🟢", use_container_width=True):
                     to_log = [k for k,v in status.items() if v]
                     if to_log and log_progress(user, to_log):
                         st.success(f"Updates pushed! +{len(to_log)*10} XP")
@@ -301,6 +423,7 @@ def main_dashboard():
             years = sorted(history_df['date'].dt.year.unique(), reverse=True)
             current_year = date.today().year
             if current_year not in years: years.insert(0, current_year)
+            
             c1, c2 = st.columns([5, 1])
             with c2:
                 st.write("")
@@ -309,26 +432,24 @@ def main_dashboard():
                 st.subheader(f"Contribution Map ({sel_year})")
                 grid_fig = plot_github_grid(history_df, user, sel_year)
                 if grid_fig: st.plotly_chart(grid_fig, use_container_width=True, config={'displayModeBar': False})
-            st.divider()
-            st.subheader("Completion Rates")
-            active_count = len(get_user_challenges(user))
-            pie_fig = plot_completion_pies(history_df, user, active_count)
-            st.plotly_chart(pie_fig, use_container_width=True)
+            
             st.divider()
             st.subheader("📊 Habit Breakdown")
             col_month, col_year = st.columns(2)
             current_month = date.today().month
+            
             with col_month:
                 bar_fig_month = plot_habit_breakdown_bars(history_df, user, sel_year, current_month)
                 if bar_fig_month: st.plotly_chart(bar_fig_month, use_container_width=True)
                 else: st.info(f"No data for {calendar.month_name[current_month]} {sel_year}.")
+            
             with col_year:
                 bar_fig_year = plot_habit_breakdown_bars(history_df, user, sel_year)
                 if bar_fig_year: st.plotly_chart(bar_fig_year, use_container_width=True)
                 else: st.info(f"No data for {sel_year}.")
+                
             st.divider()
             st.subheader("🔮 Correlation Lab")
-            st.caption("See which habits trigger others.")
             corr_fig = plot_correlation_matrix(history_df, user)
             if corr_fig: st.plotly_chart(corr_fig, use_container_width=True)
             else: st.info("Need more habit variety to show correlations.")
